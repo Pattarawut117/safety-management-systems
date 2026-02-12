@@ -1,0 +1,562 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================
+// User & Authentication
+// ============================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  password      String
+  role          UserRole  @default(EMPLOYEE)
+  department    String?
+  position      String?
+  phoneNumber   String?
+  profileImage  String?
+  factoryId     String?
+  factory       Factory?  @relation(fields: [factoryId], references: [id])
+  
+  // Relations
+  reportedIncidents     Incident[]      @relation("ReportedBy")
+  assignedActions       Action[]        @relation("AssignedTo")
+  createdActions        Action[]        @relation("CreatedBy")
+  comments              Comment[]
+  notifications         Notification[]
+  activityLogs          ActivityLog[]
+  
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastLoginAt   DateTime?
+
+  @@index([factoryId])
+  @@index([email])
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  FACTORY_ADMIN
+  SAFETY_OFFICER
+  SUPERVISOR
+  EMPLOYEE
+}
+
+// ============================================
+// Factory & Locations
+// ============================================
+
+model Factory {
+  id          String   @id @default(cuid())
+  name        String
+  code        String   @unique
+  address     String?
+  description String?
+  
+  // Relations
+  buildings   Building[]
+  incidents   Incident[]
+  users       User[]
+  zones       Zone[]
+  
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([code])
+}
+
+model Building {
+  id          String   @id @default(cuid())
+  factoryId   String
+  factory     Factory  @relation(fields: [factoryId], references: [id], onDelete: Cascade)
+  
+  name        String
+  code        String
+  description String?
+  
+  // 3D Model
+  model3DUrl  String?  // URL to glTF/GLB file
+  modelData   Json?    // Additional 3D model metadata
+  
+  // Relations
+  floors      Floor[]
+  incidents   Incident[]
+  zones       Zone[]
+  
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([factoryId, code])
+  @@index([factoryId])
+}
+
+model Floor {
+  id          String   @id @default(cuid())
+  buildingId  String
+  building    Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  
+  floorNumber Int      // 0 = Ground, 1 = First floor, -1 = Basement
+  name        String
+  
+  // Floor Plan Images
+  planImageUrl   String?  // 2D floor plan image
+  plan3DUrl      String?  // 3D model for this floor
+  
+  // Dimensions
+  width       Float?
+  height      Float?
+  elevation   Float?   // Height from ground level
+  
+  // Relations
+  zones       Zone[]
+  incidents   Incident[]
+  
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([buildingId, floorNumber])
+  @@index([buildingId])
+}
+
+model Zone {
+  id          String   @id @default(cuid())
+  factoryId   String
+  factory     Factory  @relation(fields: [factoryId], references: [id], onDelete: Cascade)
+  buildingId  String?
+  building    Building? @relation(fields: [buildingId], references: [id])
+  floorId     String?
+  floor       Floor?   @relation(fields: [floorId], references: [id])
+  
+  name        String
+  code        String
+  type        ZoneType
+  description String?
+  
+  // Risk Level
+  riskLevel   RiskLevel @default(LOW)
+  
+  // Boundary coordinates (polygon)
+  boundaryData Json?    // Array of {x, y, z} coordinates
+  
+  // Relations
+  incidents   Incident[]
+  
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([factoryId, code])
+  @@index([factoryId])
+  @@index([buildingId])
+}
+
+enum ZoneType {
+  PRODUCTION
+  WAREHOUSE
+  OFFICE
+  UTILITY
+  HAZARDOUS
+  RESTRICTED
+  COMMON_AREA
+  PARKING
+}
+
+enum RiskLevel {
+  VERY_LOW
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// ============================================
+// Incidents (Near-miss & Accidents)
+// ============================================
+
+model Incident {
+  id            String   @id @default(cuid())
+  incidentNumber String  @unique  // Auto-generated: INC-2024-0001
+  
+  // Type & Classification
+  type          IncidentType
+  category      IncidentCategory
+  subCategory   String?
+  severity      SeverityLevel
+  
+  // Description
+  title         String
+  description   String   @db.Text
+  immediateAction String? @db.Text
+  
+  // Location
+  factoryId     String
+  factory       Factory  @relation(fields: [factoryId], references: [id])
+  buildingId    String?
+  building      Building? @relation(fields: [buildingId], references: [id])
+  floorId       String?
+  floor         Floor?   @relation(fields: [floorId], references: [id])
+  zoneId        String?
+  zone          Zone?    @relation(fields: [zoneId], references: [id])
+  
+  // 3D Coordinates
+  locationX     Float
+  locationY     Float
+  locationZ     Float?
+  
+  // Additional location details
+  locationDescription String?
+  
+  // People involved
+  reportedById  String
+  reportedBy    User     @relation("ReportedBy", fields: [reportedById], references: [id])
+  witnessNames  String?  // Comma-separated or JSON
+  injuredCount  Int      @default(0)
+  
+  // Timeline
+  occurredAt    DateTime
+  reportedAt    DateTime @default(now())
+  
+  // Status & Priority
+  status        IncidentStatus @default(REPORTED)
+  priority      Priority       @default(MEDIUM)
+  
+  // Investigation
+  rootCause     String?  @db.Text
+  contributingFactors Json?
+  
+  // Relations
+  images        IncidentImage[]
+  documents     IncidentDocument[]
+  actions       Action[]
+  comments      Comment[]
+  tags          IncidentTag[]
+  
+  // Metadata
+  metadata      Json?    // Flexible field for custom data
+  
+  closedAt      DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([factoryId])
+  @@index([buildingId])
+  @@index([status])
+  @@index([type])
+  @@index([occurredAt])
+  @@index([reportedById])
+}
+
+enum IncidentType {
+  NEAR_MISS
+  MINOR_INJURY
+  MAJOR_INJURY
+  FATAL
+  PROPERTY_DAMAGE
+  ENVIRONMENTAL
+  SECURITY
+}
+
+enum IncidentCategory {
+  SLIP_TRIP_FALL
+  STRUCK_BY_OBJECT
+  CAUGHT_IN_BETWEEN
+  ELECTRICAL
+  CHEMICAL_EXPOSURE
+  FIRE_EXPLOSION
+  ERGONOMIC
+  VEHICLE_RELATED
+  MACHINERY
+  FALL_FROM_HEIGHT
+  ENVIRONMENTAL_SPILL
+  OTHER
+}
+
+enum SeverityLevel {
+  MINOR          // No injury, minimal damage
+  MODERATE       // First aid required
+  SERIOUS        // Medical treatment required
+  CRITICAL       // Hospitalization required
+  CATASTROPHIC   // Fatality or permanent disability
+}
+
+enum IncidentStatus {
+  REPORTED
+  UNDER_REVIEW
+  INVESTIGATING
+  ACTION_REQUIRED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+  REJECTED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+  CRITICAL
+}
+
+// ============================================
+// Incident Attachments
+// ============================================
+
+model IncidentImage {
+  id          String   @id @default(cuid())
+  incidentId  String
+  incident    Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  
+  url         String
+  filename    String
+  description String?
+  fileSize    Int?
+  mimeType    String?
+  
+  // Image annotations
+  annotations Json?    // Markers, arrows, text on image
+  
+  isPrimary   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([incidentId])
+}
+
+model IncidentDocument {
+  id          String   @id @default(cuid())
+  incidentId  String
+  incident    Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  
+  url         String
+  filename    String
+  description String?
+  fileSize    Int?
+  mimeType    String?
+  documentType String? // Investigation report, Medical report, etc.
+  
+  createdAt   DateTime @default(now())
+
+  @@index([incidentId])
+}
+
+model IncidentTag {
+  id          String   @id @default(cuid())
+  incidentId  String
+  incident    Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  
+  name        String
+  color       String?  // Hex color for UI
+  
+  createdAt   DateTime @default(now())
+
+  @@unique([incidentId, name])
+  @@index([incidentId])
+}
+
+// ============================================
+// Actions & Corrective Measures
+// ============================================
+
+model Action {
+  id          String   @id @default(cuid())
+  incidentId  String
+  incident    Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  
+  title       String
+  description String   @db.Text
+  actionType  ActionType
+  
+  // Assignment
+  assignedToId String
+  assignedTo   User    @relation("AssignedTo", fields: [assignedToId], references: [id])
+  createdById  String
+  createdBy    User    @relation("CreatedBy", fields: [createdById], references: [id])
+  
+  // Timeline
+  dueDate     DateTime
+  completedAt DateTime?
+  
+  // Status
+  status      ActionStatus @default(PENDING)
+  priority    Priority     @default(MEDIUM)
+  
+  // Progress
+  progressPercent Int   @default(0)
+  
+  // Cost (optional)
+  estimatedCost Float?
+  actualCost    Float?
+  
+  // Verification
+  verifiedBy    String?
+  verifiedAt    DateTime?
+  verificationNotes String?
+  
+  // Attachments
+  attachments   Json?    // URLs to files
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([incidentId])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+enum ActionType {
+  IMMEDIATE      // Immediate corrective action
+  CORRECTIVE     // Long-term corrective action
+  PREVENTIVE     // Preventive action
+  INVESTIGATION  // Further investigation needed
+}
+
+enum ActionStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  VERIFIED
+  OVERDUE
+  CANCELLED
+}
+
+// ============================================
+// Communication & Collaboration
+// ============================================
+
+model Comment {
+  id          String   @id @default(cuid())
+  incidentId  String
+  incident    Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  
+  content     String   @db.Text
+  attachments Json?    // URLs to files
+  
+  // Threading
+  parentId    String?
+  parent      Comment? @relation("CommentThread", fields: [parentId], references: [id])
+  replies     Comment[] @relation("CommentThread")
+  
+  isInternal  Boolean  @default(false) // Internal discussion vs visible to all
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([incidentId])
+  @@index([userId])
+  @@index([parentId])
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type        NotificationType
+  title       String
+  message     String
+  
+  // Link to related entity
+  entityType  String?  // Incident, Action, Comment
+  entityId    String?
+  
+  isRead      Boolean  @default(false)
+  readAt      DateTime?
+  
+  createdAt   DateTime @default(now())
+
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+enum NotificationType {
+  INCIDENT_ASSIGNED
+  INCIDENT_UPDATED
+  ACTION_ASSIGNED
+  ACTION_DUE_SOON
+  ACTION_OVERDUE
+  ACTION_COMPLETED
+  COMMENT_MENTION
+  STATUS_CHANGED
+  SYSTEM
+}
+
+// ============================================
+// Analytics & Reporting
+// ============================================
+
+model ActivityLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+  
+  action      String   // Created, Updated, Deleted, etc.
+  entityType  String   // Incident, Action, User, etc.
+  entityId    String
+  
+  changes     Json?    // Old and new values
+  ipAddress   String?
+  userAgent   String?
+  
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// Pre-calculated statistics for performance
+model DailyStatistics {
+  id              String   @id @default(cuid())
+  date            DateTime @unique
+  factoryId       String?
+  
+  totalIncidents  Int      @default(0)
+  nearMisses      Int      @default(0)
+  accidents       Int      @default(0)
+  
+  openIncidents   Int      @default(0)
+  closedIncidents Int      @default(0)
+  
+  byCategory      Json?    // Count per category
+  bySeverity      Json?    // Count per severity
+  byZone          Json?    // Count per zone
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([date])
+  @@index([factoryId])
+}
+
+// ============================================
+// System Configuration
+// ============================================
+
+model SystemConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       Json
+  description String?
+  
+  updatedAt   DateTime @updatedAt
+}
