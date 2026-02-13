@@ -11,6 +11,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  url = env("DATABASE_URL")
 }
 
 // ============================================
@@ -555,7 +556,8 @@ model DailyStatistics {
 model SystemConfig {
   id          String   @id @default(cuid())
   key         String   @unique
-  value       Json
+  value       String?
+  valueType   String?
   description String?
   
   updatedAt   DateTime @updatedAt
